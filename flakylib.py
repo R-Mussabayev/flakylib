@@ -1,4 +1,4 @@
-# Flaky Clustering Library v0.06
+# Flaky Clustering Library v0.07
 # Big MSSC (Minimum Sum-Of-Squares Clustering)
 
 # Nenad Mladenovic, Rustam Mussabayev, Alexander Krassovitskiy
