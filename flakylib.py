@@ -1444,9 +1444,7 @@ def multi_portion_mssc(samples, sample_weights, centers, method_sequence, time_s
                 
             p_sample_membership = np.empty_like(p_inds)
             p_sample_objectives = np.empty(p_n_samples)
-            p_centroid_sums = np.empty((n_clusters, n_features))
-            
-#             collected_objectives[i], p_n_iters = k_means(p_samples, p_sample_weights, p_sample_membership, p_sample_objectives, collected_centroids[i], p_centroid_sums, collected_centroid_counts[i], collected_centroid_objectives[i], local_max_iters, local_tol)
+            p_centroid_sums = np.empty((n_clusters, n_features))           
             
             collected_objectives[i] = method_sequencing(p_samples, p_sample_weights, p_sample_membership, p_sample_objectives, collected_centroids[i], p_centroid_sums, collected_centroid_counts[i], collected_centroid_objectives[i], np.inf, method_sequence, time_sequence, max_iters_sequence, kmax_sequence, local_max_iters, local_tol, n_candidates, False)
             
@@ -1520,16 +1518,12 @@ def decomposition_aggregation_mssc(samples, sample_weights, method_sequence, tim
                 basis_centroid_objectives = np.full(n_clusters, np.nan)
 
                 basis_centroids[i,:,:] = basis_samples[k_means_pp(basis_samples, basis_weights, n_clusters, n_candidates)][:,:]
-
-#                 basis_objectives[i], basis_n_iters = k_means(basis_samples, basis_weights, basis_sample_membership, basis_sample_objectives, basis_centroids[i], basis_centroid_sums, basis_centroid_counts, basis_centroid_objectives, local_max_iters, local_tol)
         
                 basis_objectives[i] = method_sequencing(basis_samples, basis_weights, basis_sample_membership, basis_sample_objectives, basis_centroids[i], basis_centroid_sums, basis_centroid_counts, basis_centroid_objectives, np.inf, method_sequence, time_sequence, max_iters_sequence, kmax_sequence, local_max_iters, local_tol, n_candidates, False)
 
             min_ind = np.argmin(basis_objectives)
-            final_centroids[:,:] = basis_centroids[min_ind,:,:]
-                           
-#         final_objective, final_n_iters = k_means(samples, sample_weights, final_sample_membership, final_sample_objectives, final_centroids, final_centroid_sums, final_centroid_counts, final_centroid_objectives, local_max_iters, local_tol)
-        
+            final_centroids[:,:] = basis_centroids[min_ind,:,:]                           
+
         final_objective = method_sequencing(samples, sample_weights, final_sample_membership, final_sample_objectives, final_centroids, final_centroid_sums, final_centroid_counts, final_centroid_objectives, np.inf, method_sequence, time_sequence, max_iters_sequence, kmax_sequence, local_max_iters, local_tol, n_candidates, False)
         
     return final_objective, final_sample_membership, final_sample_objectives, final_centroids, final_centroid_sums, final_centroid_counts, final_centroid_objectives
