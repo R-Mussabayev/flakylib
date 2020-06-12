@@ -1347,7 +1347,7 @@ def Center_Shaking_VNS(samples, sample_weights, sample_membership, sample_object
 def method_sequencing(samples, sample_weights, sample_membership, sample_objectives, centroids, centroid_sums, centroid_counts, centroid_objectives, objective, method_sequence, time_sequence, max_iters_sequence, kmax_sequence, local_max_iters=300, local_tol=0.00001, n_candidates=3, printing=False):
     assert method_sequence.ndim == 1 and time_sequence.ndim == 1 and kmax_sequence.ndim == 1
     sequence_size = method_sequence.shape[0]
-    assert time_sequence.shape[0] == sequence_size and kmax_sequence.shape[0] == sequence_size
+    assert time_sequence.shape[0] == sequence_size and max_iters_sequence.shape[0] == sequence_size and kmax_sequence.shape[0] == sequence_size
     methods = {0,1,2,3,4,5,6}    
     for i in range(sequence_size):
         method = method_sequence[i]
@@ -1393,14 +1393,14 @@ def method_sequencing(samples, sample_weights, sample_membership, sample_objecti
             
 
 
-# Parallel multi-portion Minimum Sum of Squares Clustering (MSSC)
+# Parallel multi-portion Minimum Sum-of-Squares Clustering (MSSC)
 @njit(parallel = True)
-def multi_portion_mssc(samples, sample_weights, centers, n_clusters = 3, portion_size = -1, n_portions = 3, init_method = 1, search_method=0, kmax=5, local_max_iters=300, local_tol=0.0001, max_cpu_time=10, max_iters=100, n_candidates=3):
+def multi_portion_mssc(samples, sample_weights, centers, method_sequence, time_sequence, max_iters_sequence, kmax_sequence, n_clusters = 3, portion_size = -1, n_portions = 3, init_method = 1, local_max_iters=300, local_tol=0.0001, n_candidates=3):
     
     n_samples, n_features = samples.shape
     n_centers, n_center_features = centers.shape
     n_sample_weights, = sample_weights.shape
-    init_methods = {0,1,2}      
+    init_methods = {0,1,2}
 
     assert ((n_samples == n_sample_weights) or (n_sample_weights == 0))
     assert ((init_method != 2) or (n_features == n_center_features))
@@ -1446,19 +1446,16 @@ def multi_portion_mssc(samples, sample_weights, centers, n_clusters = 3, portion
             p_sample_objectives = np.empty(p_n_samples)
             p_centroid_sums = np.empty((n_clusters, n_features))
             
-            if search_method == 1:
-                collected_objectives[i], p_n_iters = k_means(p_samples, p_sample_weights, p_sample_membership, p_sample_objectives, collected_centroids[i], p_centroid_sums, collected_centroid_counts[i], collected_centroid_objectives[i], local_max_iters, local_tol)
-                
-                collected_objectives[i], p_n_iters, p_n_local_iters = Center_Shaking_VNS(p_samples, p_sample_weights, p_sample_membership, p_sample_objectives, collected_centroids[i], p_centroid_sums, collected_centroid_counts[i], collected_centroid_objectives[i], collected_objectives[i], local_max_iters, local_tol, kmax, max_cpu_time, max_iters, n_candidates)
-            else:
-                collected_objectives[i], p_n_iters = k_means(p_samples, p_sample_weights, p_sample_membership, p_sample_objectives, collected_centroids[i], p_centroid_sums, collected_centroid_counts[i], collected_centroid_objectives[i], local_max_iters, local_tol)
+#             collected_objectives[i], p_n_iters = k_means(p_samples, p_sample_weights, p_sample_membership, p_sample_objectives, collected_centroids[i], p_centroid_sums, collected_centroid_counts[i], collected_centroid_objectives[i], local_max_iters, local_tol)
+            
+            collected_objectives[i] = method_sequencing(p_samples, p_sample_weights, p_sample_membership, p_sample_objectives, collected_centroids[i], p_centroid_sums, collected_centroid_counts[i], collected_centroid_objectives[i], np.inf, method_sequence, time_sequence, max_iters_sequence, kmax_sequence, local_max_iters, local_tol, n_candidates, False)
             
     return collected_centroids, collected_centroid_counts, collected_centroid_objectives, collected_objectives
 
 
 
 @njit(parallel = True)
-def decomposition_aggregation_mssc(samples, sample_weights, n_clusters = 3, portion_size = -1, n_portions = 3, init_method = 1, search_method=0, kmax=5, local_max_iters=300, local_tol=0.0001, max_cpu_time=10, max_iters=100, n_candidates=3, aggregation_method = 0, basis_n_init = 3):
+def decomposition_aggregation_mssc(samples, sample_weights, method_sequence, time_sequence, max_iters_sequence, kmax_sequence, n_clusters = 3, portion_size = -1, n_portions = 3, init_method = 1, local_max_iters=300, local_tol=0.0001, n_candidates=3, aggregation_method = 0, basis_n_init = 3):
     n_samples, n_features = samples.shape
     n_sample_weights, = sample_weights.shape
     
@@ -1475,7 +1472,7 @@ def decomposition_aggregation_mssc(samples, sample_weights, n_clusters = 3, port
     
         centers = np.empty((0, n_features))
 
-        centroids, centroid_counts, centroid_objectives, objectives = multi_portion_mssc(samples, sample_weights, centers, n_clusters, portion_size, n_portions, init_method, search_method, kmax, local_max_iters, local_tol, max_cpu_time, max_iters, n_candidates)
+        centroids, centroid_counts, centroid_objectives, objectives = multi_portion_mssc(samples, sample_weights, centers, method_sequence, time_sequence, max_iters_sequence, kmax_sequence, n_clusters, portion_size, n_portions, init_method, local_max_iters, local_tol, n_candidates)
 
         full_objectives = np.empty_like(objectives)        
         sample_membership = np.full(0, 0)
@@ -1509,7 +1506,7 @@ def decomposition_aggregation_mssc(samples, sample_weights, n_clusters = 3, port
             normalization1D(basis_weights, True)
 
             for i in range(n_basis_samples):
-                basis_weights[i] = np.exp(1-basis_weights[i])                       
+                basis_weights[i] = np.exp(1-basis_weights[i])
 
             basis_objectives = np.empty(basis_n_init)
             basis_centroids = np.full((basis_n_init, n_clusters, n_features), np.nan)                   
@@ -1524,14 +1521,18 @@ def decomposition_aggregation_mssc(samples, sample_weights, n_clusters = 3, port
 
                 basis_centroids[i,:,:] = basis_samples[k_means_pp(basis_samples, basis_weights, n_clusters, n_candidates)][:,:]
 
-                basis_objectives[i], basis_n_iters = k_means(basis_samples, basis_weights, basis_sample_membership, basis_sample_objectives, basis_centroids[i], basis_centroid_sums, basis_centroid_counts, basis_centroid_objectives, local_max_iters, local_tol)
+#                 basis_objectives[i], basis_n_iters = k_means(basis_samples, basis_weights, basis_sample_membership, basis_sample_objectives, basis_centroids[i], basis_centroid_sums, basis_centroid_counts, basis_centroid_objectives, local_max_iters, local_tol)
+        
+                basis_objectives[i] = method_sequencing(basis_samples, basis_weights, basis_sample_membership, basis_sample_objectives, basis_centroids[i], basis_centroid_sums, basis_centroid_counts, basis_centroid_objectives, np.inf, method_sequence, time_sequence, max_iters_sequence, kmax_sequence, local_max_iters, local_tol, n_candidates, False)
 
             min_ind = np.argmin(basis_objectives)
             final_centroids[:,:] = basis_centroids[min_ind,:,:]
                            
-        final_objective, final_n_iters = k_means(samples, sample_weights, final_sample_membership, final_sample_objectives, final_centroids, final_centroid_sums, final_centroid_counts, final_centroid_objectives, local_max_iters, local_tol)
+#         final_objective, final_n_iters = k_means(samples, sample_weights, final_sample_membership, final_sample_objectives, final_centroids, final_centroid_sums, final_centroid_counts, final_centroid_objectives, local_max_iters, local_tol)
         
-    return final_objective, final_n_iters, final_sample_membership, final_sample_objectives, final_centroids, final_centroid_sums, final_centroid_counts, final_centroid_objectives
+        final_objective = method_sequencing(samples, sample_weights, final_sample_membership, final_sample_objectives, final_centroids, final_centroid_sums, final_centroid_counts, final_centroid_objectives, np.inf, method_sequence, time_sequence, max_iters_sequence, kmax_sequence, local_max_iters, local_tol, n_candidates, False)
+        
+    return final_objective, final_sample_membership, final_sample_objectives, final_centroids, final_centroid_sums, final_centroid_counts, final_centroid_objectives
 
 
 
