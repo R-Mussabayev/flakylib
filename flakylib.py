@@ -6,10 +6,10 @@
 
 # v0.06 - 05/06/2020 - New functionality: method sequencing;
 # v0.05 - 04/06/2020 - New functionality:  Simple center shaking VNS, Membership shaking VNS, Iterative extra center insertion/deletion, procedure for choosing the new n additional centers for existing ones using the k-means++ logic;
-# v0.04 - 17/03/2020 - Different initialization modes are added to "Decomposition/aggregation k-means";
-# v0.03 - 13/03/2020 - k-means++ is implemented;
-# v0.02 - 10/03/2020 - Decomposition/aggregation k-means is implemented;
-# v0.01 - 27/02/2020 - Initial release. Multiprocessing k-means is implemented.
+# v0.04 - 17/03/2020 - Different initialization modes were added to "Decomposition/aggregation k-means";
+# v0.03 - 13/03/2020 - k-means++ was implemented;
+# v0.02 - 10/03/2020 - Decomposition/aggregation k-means was implemented;
+# v0.01 - 27/02/2020 - Initial release. Multiprocessing k-means was implemented.
 
 import math
 import time
