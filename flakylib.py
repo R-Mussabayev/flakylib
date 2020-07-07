@@ -16,8 +16,7 @@ import time
 import pickle
 import numpy as np
 import numba as nb
-from numba import njit, objmode
-from numba import prange
+from numba import njit, prange, objmode
 from itertools import cycle
 import matplotlib.pyplot as plt
 from sklearn.datasets import make_blobs
@@ -1203,37 +1202,41 @@ def shake_centers(n_reallocations, samples, sample_weights, centroids, centroid_
     n_samples, n_features = samples.shape
     n_sample_weights, = sample_weights.shape
     n_centers = centroids.shape[0]
+    n_real_centers = np.sum(centroid_counts > 0)
         
-    if n_reallocations > 0:
-                    
+    if (n_reallocations > 0) and (n_real_centers > 0):
+        
+        if n_reallocations > n_real_centers:
+            n_reallocations = n_real_centers        
+        
+        real_center_inds = np.full(n_real_centers, -1)
+        real_center_objectives = np.full(n_real_centers, 0.0)
+        
+        ind = 0
         sum_of_centroid_objectives = 0.0
         for i in range(n_centers):
-            if not np.isnan(centroid_objectives[i]):
+            if (not np.isnan(centroid_objectives[i])) and (centroid_counts[i] > 0.0):
                 sum_of_centroid_objectives += centroid_objectives[i]
-        rand_vals = np.random.random_sample(n_reallocations) * sum_of_centroid_objectives
-        eliminated_inds = np.full(n_reallocations, -1)
-        cum_search(centroid_objectives, rand_vals, eliminated_inds)
+                real_center_inds[ind] = i
+                real_center_objectives[ind] = centroid_objectives[i]
+                ind += 1       
 
-        n_added_centers = 0
+        rand_vals = np.random.random_sample(n_reallocations) * sum_of_centroid_objectives
+        replaced_inds = np.full(n_reallocations, -1)
+        cum_search(real_center_objectives, rand_vals, replaced_inds)               
+        
+        additional_center_inds = additional_centers(samples, sample_weights, centroids, n_reallocations, n_candidates)
+        n_added = 0
         for i in range(n_centers):
-            is_eliminated = False
+            is_replaced = False
             for j in range(n_reallocations):
-                if eliminated_inds[j] == i:
-                    is_eliminated = True
+                if real_center_inds[replaced_inds[j]] == i:
+                    is_replaced = True
                     break            
-            if (not is_eliminated) and (centroid_counts[i] > 0.0):
-                centroids[n_added_centers,:] = centroids[i,:]
-                n_added_centers += 1
-                
-        centroids[n_added_centers:,:] = np.nan
-        
-        n_additional_centers = n_centers - n_added_centers
-        
-        additional_center_inds = additional_centers(samples, sample_weights, centroids, n_additional_centers, n_candidates)
+            if is_replaced:
+                centroids[i,:] = samples[additional_center_inds[n_added],:]
+                n_added += 1
             
-        for i in range(n_additional_centers):
-            centroids[n_added_centers,:] = samples[additional_center_inds[i],:]
-            n_added_centers += 1
 
             
 # Simple center shaking VNS
@@ -1341,6 +1344,39 @@ def Center_Shaking_VNS(samples, sample_weights, sample_membership, sample_object
     if printing: print(best_objective)
                 
     return best_objective, n_iters, best_n_local_iters
+
+@njit
+def optimal_cluster_number(samples, min_clusters = 1, max_clusters = 20, use_vns = True, n_candidates = 3, local_max_iters = 300, local_tol=0.000001, kmax = 5, max_cpu_time = 3, max_vns_iters = 3000):
+    assert (min_clusters >= 1) and (max_clusters > min_clusters)       
+    n_samples = samples.shape[0]
+    n_features = samples.shape[1]
+    sample_weights, sample_membership, sample_objectives, centroids, centroid_sums, centroid_counts, centroid_objectives = empty_state(n_samples, n_features, max_clusters)
+    n_objectives = max_clusters-min_clusters+1
+    objectives = np.full(n_objectives, 0.0)      
+    centroids[:min_clusters,:] = samples[k_means_pp(samples, sample_weights, min_clusters, n_candidates)][:]              
+    ind = 0
+    objective, n_iters = k_means(samples, sample_weights, sample_membership, sample_objectives, centroids, centroid_sums, centroid_counts, centroid_objectives, local_max_iters, local_tol)
+    if use_vns:
+        objective, n_iters, n_local_iters = Center_Shaking_VNS(samples, sample_weights, sample_membership, sample_objectives, centroids, centroid_sums, centroid_counts, centroid_objectives, objective, local_max_iters, local_tol, kmax, max_cpu_time, max_vns_iters, n_candidates, False)
+    objectives[ind] = objective
+    ind = min_clusters    
+    n = max_clusters-min_clusters
+    for i in range(n):
+        new_center_ind = additional_centers(samples, sample_weights, centroids, 1, n_candidates)[0]       
+        centroids[i+1,:] = samples[new_center_ind,:]        
+        objective, n_iters = k_means(samples, sample_weights, sample_membership, sample_objectives, centroids, centroid_sums, centroid_counts, centroid_objectives, local_max_iters, local_tol)
+        if use_vns:
+            objective, n_iters, n_local_iters = Center_Shaking_VNS(samples, sample_weights, sample_membership, sample_objectives, centroids, centroid_sums, centroid_counts, centroid_objectives, objective, local_max_iters, local_tol, kmax, max_cpu_time, max_vns_iters, n_candidates, False)
+        objectives[ind] = objective
+        ind += 1    
+    cluster_nums = np.arange(min_clusters+1, max_clusters)
+    drop_rates = np.empty(n_objectives-2)
+    for i in range(1,n-1):
+        p1 = objectives[i-1]
+        p2 = objectives[i]
+        p3 = objectives[i+1]
+        drop_rates[i-1] = (p2-p3)/(p1-p2)      
+    return cluster_nums[np.argmax(drop_rates)]
 
 
 @njit
