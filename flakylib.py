@@ -1345,38 +1345,79 @@ def Center_Shaking_VNS(samples, sample_weights, sample_membership, sample_object
                 
     return best_objective, n_iters, best_n_local_iters
 
+
+# VNS based "Elbow Method" for identification of optimal number of clusters
+
+# samples - entities/samples to be clusterized
+# [min_clusters, max_clusters] - range in which the number of clusters will be searched
+# use_vns - if True then "Center Shaking VNS" will be applied for more precise number of clusters identification
+# n_candidates
+# local_max_iters
+# local_tol=0.0001
+
+# VNS attributes:
+# kmax - maximum power of shaking for "Center Shaking VNS"
+# max_cpu_time - time limit for VNS in seconds (first VNS break condition)
+# max_vns_iters - maximum number of VNS iterations (second VNS break condition)
+
+# The stability of this algorithm mainly depends on 
+# the following parameters: n_candidates, max_cpu_time, max_vns_iters.
+# Their increasing should lead to a more stable results,
+# but at the same time, the algorithm running time will also increase.
 @njit
-def optimal_cluster_number(samples, min_clusters = 1, max_clusters = 20, use_vns = True, n_candidates = 3, local_max_iters = 300, local_tol=0.000001, kmax = 5, max_cpu_time = 3, max_vns_iters = 3000):
-    assert (min_clusters >= 1) and (max_clusters > min_clusters)       
-    n_samples = samples.shape[0]
-    n_features = samples.shape[1]
+def optimal_cluster_number(samples, min_clusters = 1, max_clusters = 30, use_vns = True, n_candidates = 6, local_max_iters = 300, local_tol=0.0001, kmax = 5, max_cpu_time = 4, max_vns_iters = 3000):
+    assert (min_clusters >= 1) and (max_clusters > min_clusters)
+    
+    # shift the cluster range by one left and right
+    if min_clusters > 1:
+        min_clusters -= 1
+    max_clusters += 1
+        
+    n_samples = samples.shape[0] # number of entities in dataset
+    n_features = samples.shape[1] # number entity features
+    
+    # creation of empty working arrays which will be used for storing clustering output data
     sample_weights, sample_membership, sample_objectives, centroids, centroid_sums, centroid_counts, centroid_objectives = empty_state(n_samples, n_features, max_clusters)
-    n_objectives = max_clusters-min_clusters+1
-    objectives = np.full(n_objectives, 0.0)      
-    centroids[:min_clusters,:] = samples[k_means_pp(samples, sample_weights, min_clusters, n_candidates)][:]              
-    ind = 0
+    
+    n_objectives = max_clusters-min_clusters+1 # Number of objectives to be sequentially calculated
+    objectives = np.full(n_objectives, 0.0) # Array for storing the dynamic of objective values
+        
+    # Seeds for clustering with maximum number of centroids initialized by k-means++
+    centroids = samples[k_means_pp(samples, sample_weights, max_clusters, n_candidates)]
+    # Doing the clustering
     objective, n_iters = k_means(samples, sample_weights, sample_membership, sample_objectives, centroids, centroid_sums, centroid_counts, centroid_objectives, local_max_iters, local_tol)
-    if use_vns:
+    
+    if use_vns: # try to find global clustering optimum by appling "Center Shaking VNS" for obtain more precise and stable clustering results
         objective, n_iters, n_local_iters = Center_Shaking_VNS(samples, sample_weights, sample_membership, sample_objectives, centroids, centroid_sums, centroid_counts, centroid_objectives, objective, local_max_iters, local_tol, kmax, max_cpu_time, max_vns_iters, n_candidates, False)
-    objectives[ind] = objective
-    ind = min_clusters    
-    n = max_clusters-min_clusters
-    for i in range(n):
-        new_center_ind = additional_centers(samples, sample_weights, centroids, 1, n_candidates)[0]       
-        centroids[i+1,:] = samples[new_center_ind,:]        
-        objective, n_iters = k_means(samples, sample_weights, sample_membership, sample_objectives, centroids, centroid_sums, centroid_counts, centroid_objectives, local_max_iters, local_tol)
-        if use_vns:
-            objective, n_iters, n_local_iters = Center_Shaking_VNS(samples, sample_weights, sample_membership, sample_objectives, centroids, centroid_sums, centroid_counts, centroid_objectives, objective, local_max_iters, local_tol, kmax, max_cpu_time, max_vns_iters, n_candidates, False)
-        objectives[ind] = objective
-        ind += 1    
-    cluster_nums = np.arange(min_clusters+1, max_clusters)
-    drop_rates = np.empty(n_objectives-2)
-    for i in range(1,n-1):
-        p1 = objectives[i-1]
-        p2 = objectives[i]
-        p3 = objectives[i+1]
-        drop_rates[i-1] = (p2-p3)/(p1-p2)      
-    return cluster_nums[np.argmax(drop_rates)]
+    
+    ind = n_objectives-1
+    objectives[ind] = objective # save the first objective value for full number of clusters
+    ind -= 1
+    
+    sequence = np.argsort(centroid_objectives) # The order of centroids removing (last centroid in the list will be removed at first)
+        
+    for i in range(n_objectives-1):
+        new_centroids = np.full((max_clusters, n_features), np.nan) # empty centroids for subsequent clustering
+        
+        new_centroids[:ind+1,:] = centroids[sequence[:ind+1]][:] # Coping first best centroind (in each iteration the number of which is decreaced)
+        
+        # Reclusterize the dataset with the decreaced number of clusters 
+        objective, n_iters = k_means(samples, sample_weights, sample_membership, sample_objectives, new_centroids, centroid_sums, centroid_counts, centroid_objectives, local_max_iters, local_tol)
+        if use_vns: # try to find global clustering optimum by appling "Center Shaking VNS" for obtain more precise and stable clustering results
+            objective, n_iters, n_local_iters = Center_Shaking_VNS(samples, sample_weights, sample_membership, sample_objectives, new_centroids, centroid_sums, centroid_counts, centroid_objectives, objective, local_max_iters, local_tol, kmax, max_cpu_time, max_vns_iters, n_candidates, False)
+        objectives[ind] = objective # save the next objective value for the decreased number of clusters
+        ind -= 1 # Decreacing the number of first best centroinds to be coped on the next iteration
+                
+    cluster_nums = np.arange(min_clusters+1, max_clusters) # enumerate the obtained objectives according to their number of clusters
+    drop_rates = np.empty(n_objectives-2) # array for storing calculated "drop rates"
+    # "drop rate" is the ratio between the current objective drop and the next one 
+    # (the larger is the ratio, the more probably that this is the true number of clusters)
+    for i in range(1,n_objectives-2):
+        p1 = objectives[i-1] # previous objective
+        p2 = objectives[i] # current objective
+        p3 = objectives[i+1] # next objective
+        drop_rates[i-1] = (p2-p3)/(p1-p2) # (p2-p3) - current drop; (p1-p2) - next drop
+    return cluster_nums[np.argmax(drop_rates)] # number of clusters with maximal "drop rate"
 
 
 @njit
