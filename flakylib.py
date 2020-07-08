@@ -1396,6 +1396,7 @@ def optimal_cluster_number(samples, min_clusters = 1, max_clusters = 30, use_vns
     
     sequence = np.argsort(centroid_objectives) # The order of centroids removing (last centroid in the list will be removed at first)
         
+    # Start the cycle for sequential cluster number decreasing and corresponding objective evaluation
     for i in range(n_objectives-1):
         new_centroids = np.full((max_clusters, n_features), np.nan) # empty centroids for subsequent clustering
         
