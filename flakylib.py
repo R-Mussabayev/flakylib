@@ -1,10 +1,11 @@
-# Flaky Clustering Library v0.07
+# Flaky Clustering Library v0.08
 # Big MSSC (Minimum Sum-Of-Squares Clustering)
 
 # Nenad Mladenovic, Rustam Mussabayev, Alexander Krassovitskiy
 # rmusab@gmail.com
 
 
+# v0.08 - 18/09/2020 - Bug fixing;
 # v0.07 - 19/07/2020 - New functionality: distance matrices calculation routines with GPU support; different distance metrics; revision of optimal number of clusters routine;
 # v0.06 - 05/06/2020 - New functionality: method sequencing;
 # v0.05 - 04/06/2020 - New functionality:  Simple center shaking VNS, Membership shaking VNS, Iterative extra center insertion/deletion, procedure for choosing the new n additional centers for existing ones using the k-means++ logic;
@@ -260,7 +261,7 @@ def cosine_distance(u, v):
     if (u_norm == 0.) or (v_norm == 0.):
         d = 1.
     else:
-        d = 1.-udotv / (u_norm * v_norm) ** .5
+        d = abs(1.-udotv / (u_norm * v_norm) ** .5) # Return absolute value to avoid small negative value due to rounding
     return u.dtype.type(d)
 
 
@@ -381,7 +382,7 @@ def distance_matrix_cosine_cpu(X):
             if out[i,i]==0. or out[j,j]==0.:
                 out[i,j] = 1.
             else:
-                out[i,j] = 1.-out[i,j] / (out[i,i] * out[j,j]) ** .5
+                out[i,j] = abs(1.-out[i,j] / (out[i,i] * out[j,j]) ** .5) # Return absolute value to avoid small negative value due to rounding
             out[j,i] = out[i,j]
     np.fill_diagonal(out, 0.)
     return out
@@ -399,7 +400,7 @@ def distance_matrix_cosine_XY_cpu(X, Y):
             if NX[i]==0. or NY[j]==0.:
                 out[i,j] = 1.
             else:
-                out[i,j] = 1.0-out[i,j] / (NX[i] * NY[j]) ** .5
+                out[i,j] = abs(1.0-out[i,j] / (NX[i] * NY[j]) ** .5) # Return absolute value to avoid small negative value due to rounding
     return out
 
 
@@ -419,14 +420,14 @@ def distance_matrix_cosine_XY_weighted_cpu(X, Y, weightsX, weightsY):
                 if NX[i]==0. or NY[j]==0.:
                     out[i,j] = 1. * weightsX[i] * weightsY[j]
                 else:
-                    out[i,j] = (1.0-out[i,j] / (NX[i] * NY[j]) ** .5) * weightsX[i] * weightsY[j]
+                    out[i,j] = abs(1.0-out[i,j] / (NX[i] * NY[j]) ** .5) * weightsX[i] * weightsY[j]
     else:        
         for i in prange(nX):
             for j in range(nY):
                 if NX[i]==0. or NY[j]==0.:
                     out[i,j] = 1.
                 else:
-                    out[i,j] = 1.0-out[i,j] / (NX[i] * NY[j]) ** .5
+                    out[i,j] = abs(1.0-out[i,j] / (NX[i] * NY[j]) ** .5)
     return out
 
 
@@ -949,7 +950,7 @@ def k_means_pp_naive(samples, sample_weights, n_clusters, distance_measure=0):
             for i in prange(n_samples):
                 min_dist = np.inf
                 for j in range(n_centroids):
-                    dist = calc_distance(samples[i], samples[centroid_inds[j]])
+                    dist = calc_distance(samples[i], samples[centroid_inds[j]], distance_measure)
                     dist *= sample_weights[i]*sample_weights[centroid_inds[j]]
                     if dist < min_dist:
                         min_dist = dist
@@ -1049,9 +1050,12 @@ def k_means_pp(samples, sample_weights, n_centers=3, n_candidates=3, distance_me
         else:
             center_inds[0] = np.random.randint(n_samples)
                 
-        dist_mat = np.empty((1,n_samples))
+        #dist_mat = np.empty((1,n_samples))
         indices = np.full(1, center_inds[0])
-        distance_matrix_XY_weighted_cpu(samples[indices], samples, sample_weights[indices], sample_weights, dist_mat, distance_measure)
+        if distance_measure == 1:
+            dist_mat = distance_matrix_cosine_XY_weighted_cpu(samples[indices], samples, sample_weights[indices], sample_weights)
+        else:
+            dist_mat = distance_matrix_euclidean2_XY_weighted_cpu(samples[indices], samples, sample_weights[indices], sample_weights)
         
         closest_dist_sq = dist_mat[0]
         
@@ -1061,7 +1065,7 @@ def k_means_pp(samples, sample_weights, n_centers=3, n_candidates=3, distance_me
                                       
         candidate_ids = np.full(n_candidates, -1)
                 
-        distance_to_candidates = np.empty((n_candidates,n_samples))
+        #distance_to_candidates = np.empty((n_candidates,n_samples))
         candidates_pot = np.empty(n_candidates)
                 
         for c in range(1,n_centers):
@@ -1069,7 +1073,11 @@ def k_means_pp(samples, sample_weights, n_centers=3, n_candidates=3, distance_me
             
             cum_search(closest_dist_sq, rand_vals, candidate_ids)
                 
-            distance_matrix_XY_weighted_cpu(samples[candidate_ids], samples, sample_weights[candidate_ids], sample_weights, distance_to_candidates, distance_measure)
+            
+            if distance_measure == 1:
+                distance_to_candidates = distance_matrix_cosine_XY_weighted_cpu(samples[candidate_ids], samples, sample_weights[candidate_ids], sample_weights)
+            else:
+                distance_to_candidates = distance_matrix_euclidean2_XY_weighted_cpu(samples[candidate_ids], samples, sample_weights[candidate_ids], sample_weights)
             
             for i in prange(n_candidates):
                 candidates_pot[i] = 0.0
@@ -1111,11 +1119,14 @@ def additional_centers(samples, sample_weights, centroids, n_additional_centers=
                                        
         if n_nondegenerate_clusters > 0:
             closest_dist_sq = np.full(n_samples, np.inf)
-            distance_to_centroids = np.empty((n_nondegenerate_clusters, n_samples))
+            #distance_to_centroids = np.empty((n_nondegenerate_clusters, n_samples))
             
             centroid_weights = np.ones(n_nondegenerate_clusters)
             
-            distance_matrix_XY_weighted_cpu(centroids[nondegenerate_mask], samples, centroid_weights, sample_weights,  distance_to_centroids, distance_measure)
+            if distance_measure == 1:
+                distance_to_centroids = distance_matrix_cosine_XY_weighted_cpu(centroids[nondegenerate_mask], samples, centroid_weights, sample_weights)
+            else:
+                distance_to_centroids = distance_matrix_euclidean2_XY_weighted_cpu(centroids[nondegenerate_mask], samples, centroid_weights, sample_weights)
                     
             current_pot = 0.0
             for i in prange(n_samples):
@@ -1134,9 +1145,12 @@ def additional_centers(samples, sample_weights, centroids, n_additional_centers=
             else:
                 center_inds[0] = np.random.randint(n_samples)
 
-            dist_mat = np.empty((1,n_samples))
+            #dist_mat = np.empty((1,n_samples))
             indices = np.full(1, center_inds[0])
-            distance_matrix_XY_weighted_cpu(samples[indices], samples, sample_weights[indices], sample_weights, dist_mat, distance_measure)
+            if distance_measure == 1:
+                dist_mat = distance_matrix_cosine_XY_weighted_cpu(samples[indices], samples, sample_weights[indices], sample_weights)
+            else:
+                dist_mat = distance_matrix_euclidean2_XY_weighted_cpu(samples[indices], samples, sample_weights[indices], sample_weights)
 
             closest_dist_sq = dist_mat[0]
             
@@ -1148,7 +1162,7 @@ def additional_centers(samples, sample_weights, centroids, n_additional_centers=
         
         candidate_ids = np.full(n_candidates, -1)
                 
-        distance_to_candidates = np.empty((n_candidates,n_samples))
+        #distance_to_candidates = np.empty((n_candidates,n_samples))
         candidates_pot = np.empty(n_candidates)
                 
         for c in range(n_added_centers, n_additional_centers):
@@ -1157,7 +1171,10 @@ def additional_centers(samples, sample_weights, centroids, n_additional_centers=
             
             cum_search(closest_dist_sq, rand_vals, candidate_ids)
                 
-            distance_matrix_XY_weighted_cpu(samples[candidate_ids], samples, sample_weights[candidate_ids], sample_weights, distance_to_candidates, distance_measure)
+            if distance_measure == 1:
+                distance_to_candidates = distance_matrix_cosine_XY_weighted_cpu(samples[candidate_ids], samples, sample_weights[candidate_ids], sample_weights)
+            else:
+                distance_to_candidates = distance_matrix_euclidean2_XY_weighted_cpu(samples[candidate_ids], samples, sample_weights[candidate_ids], sample_weights)
             
             for i in prange(n_candidates):
                 candidates_pot[i] = 0.0
