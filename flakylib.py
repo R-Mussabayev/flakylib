@@ -1749,6 +1749,7 @@ def iterative_extra_center_insertion_deletion(samples, sample_weights, sample_me
     
     n_iters = 0
     n_local_iters = 0
+    cpu_time = 0.0
     
     if (n_samples > 0) and (n_features > 0) and (n_centers > 0):
         n_centers_ext = n_centers + 1
@@ -1788,6 +1789,11 @@ def iterative_extra_center_insertion_deletion(samples, sample_weights, sample_me
             current_time = time.perf_counter()        
         cpu_time = current_time - start_time
         
+        if printing: 
+            with objmode:
+                print ('%-30s%-15s%-15s' % ('objective', 'n_iters', 'cpu_time'))            
+            
+        
         while (cpu_time < max_cpu_time) and (n_iters < max_iters) and (tolerance > tol):
             
             for i in prange(n_samples):
@@ -1813,11 +1819,15 @@ def iterative_extra_center_insertion_deletion(samples, sample_weights, sample_me
 
             ext_objective, ext_n_iters = k_means(samples, sample_weights, ext_sample_membership, ext_sample_objectives, ext_centroids, ext_centroid_sums, ext_centroid_counts, ext_centroid_objectives, local_max_iters, local_tol, True)
                                     
+            with objmode(current_time = 'float64'):
+                current_time = time.perf_counter()
+            cpu_time = current_time - start_time                
+                
             if ext_objective < best_objective:
                 
                 tolerance = 1 - ext_objective/best_objective
                 
-                best_objective = ext_objective                
+                best_objective = ext_objective
                 for i in prange(n_samples):
                     best_sample_membership[i] = ext_sample_membership[i]
                     best_sample_objectives[i] = ext_sample_objectives[i]
@@ -1831,13 +1841,12 @@ def iterative_extra_center_insertion_deletion(samples, sample_weights, sample_me
                 
                 n_local_iters = ext_n_iters
                                 
-                if printing: print(best_objective)
+                if printing:
+                    with objmode:
+                        print ('%-30f%-15i%-15.2f' % (best_objective, n_iters, cpu_time))
                 
             n_iters += 1
             
-            with objmode(current_time = 'float64'):
-                current_time = time.perf_counter()
-            cpu_time = current_time - start_time
         
         if best_excess_centroid_ind > -1:
             objective = best_objective
@@ -1859,7 +1868,9 @@ def iterative_extra_center_insertion_deletion(samples, sample_weights, sample_me
                         centroids[ind,j] = best_centroids[i,j]
                         centroid_sums[ind,j] = best_centroid_sums[i,j]
                         
-    if printing: print(objective)
+    if printing:
+        with objmode:
+            print ('%-30f%-15i%-15.2f' % (best_objective, n_iters, cpu_time))
                            
     return objective, n_iters, n_local_iters
        
@@ -1900,6 +1911,13 @@ def shake_membership(n_reallocations, n_samples, n_clusters, sample_membership):
 def Membership_Shaking_VNS(samples, sample_weights, sample_membership, sample_objectives, centroids, centroid_sums, centroid_counts, centroid_objectives, objective, k_max_iters=300, h_max_iters=300, k_tol=0.0001, h_tol=0.0001, kmax=5, max_cpu_time=10, max_iters=100, printing=False):
     n_samples, n_features = samples.shape
     n_centers = centroids.shape[0]
+    cpu_time = 0.0
+    n_iters = 0
+    k = 1
+    n_iters_k = 0
+    if printing: 
+        with objmode:
+            print ('%-30s%-7s%-15s%-15s%-15s' % ('objective', 'k', 'n_iters', 'n_iters_k', 'cpu_time'))
     
     with objmode(start_time = 'float64'):
         start_time = time.perf_counter()
@@ -1913,9 +1931,8 @@ def Membership_Shaking_VNS(samples, sample_weights, sample_membership, sample_ob
     with objmode(current_time = 'float64'):
         current_time = time.perf_counter()
                 
-    cpu_time = current_time- start_time 
-    n_iters = 0
-    k = 1
+    cpu_time = current_time- start_time       
+        
     while (cpu_time < max_cpu_time) and (n_iters < max_iters):
         
         # neighborhood solution
@@ -1928,28 +1945,34 @@ def Membership_Shaking_VNS(samples, sample_weights, sample_membership, sample_ob
         
         objective, n_local_iters = k_h_means(samples, sample_weights, sample_membership, sample_objectives, centroids, centroid_sums, centroid_counts, centroid_objectives, k_max_iters, h_max_iters, k_tol, h_tol)
         
+        with objmode(current_time = 'float64'):
+            current_time = time.perf_counter()
+        cpu_time = current_time - start_time
+        
         if objective < best_objective:
             best_objective = objective
             
             copy_solution(sample_membership, sample_objectives, centroids, centroid_sums, centroid_counts, centroid_objectives, best_sample_membership, best_sample_objectives, best_centroids, best_centroid_sums, best_centroid_counts, best_centroid_objectives)
                         
-            if printing: print(best_objective, k)
+            if printing:
+                with objmode:
+                    print ('%-30f%-7i%-15i%-15i%-15.2f' % (best_objective, k, n_iters, n_iters_k, cpu_time))
             k = 0
             
         k += 1
-        if k > kmax: k = 1
+        if k > kmax:
+            k = 1
+            n_iters_k += 1
         n_iters += 1
-        
-        with objmode(current_time = 'float64'):
-            current_time = time.perf_counter()
-        cpu_time = current_time - start_time
-            
+                    
     objective = best_objective
     
     copy_solution(best_sample_membership, best_sample_objectives, best_centroids, best_centroid_sums, best_centroid_counts, best_centroid_objectives, sample_membership, sample_objectives, centroids, centroid_sums, centroid_counts, centroid_objectives)
     
-    if printing: print(objective)
-        
+    if printing:
+        with objmode:
+            print ('%-30f%-7i%-15i%-15i%-15.2f' % (best_objective, k, n_iters, n_iters_k, cpu_time))
+    
     return objective, n_iters
     
 
@@ -1958,54 +1981,46 @@ def shake_centers(n_reallocations, samples, sample_weights, centroids, centroid_
     n_samples, n_features = samples.shape
     n_sample_weights, = sample_weights.shape
     n_centers = centroids.shape[0]
-    n_real_centers = np.sum(centroid_counts > 0)
+    nondegenerate_mask = np.sum(np.isnan(centroids), axis = 1) == 0
+    n_nondegenerate = np.sum(nondegenerate_mask)
         
-    if (n_reallocations > 0) and (n_real_centers > 0):
+    if (n_reallocations > 0) and (n_nondegenerate > 0):
         
-        if n_reallocations > n_real_centers:
-            n_reallocations = n_real_centers        
+        if n_reallocations > n_nondegenerate:
+            n_reallocations = n_nondegenerate
         
-        real_center_inds = np.full(n_real_centers, -1)
-        real_center_objectives = np.full(n_real_centers, 0.0)
-        
-        ind = 0
-        sum_of_centroid_objectives = 0.0
-        for i in range(n_centers):
-            if (not np.isnan(centroid_objectives[i])) and (centroid_counts[i] > 0.0):
-                sum_of_centroid_objectives += centroid_objectives[i]
-                real_center_inds[ind] = i
-                real_center_objectives[ind] = centroid_objectives[i]
-                ind += 1       
+        nondegenerate_inds = np.arange(n_centers)[nondegenerate_mask]
+        nondegenerate_objectives = centroid_objectives[nondegenerate_mask]
+        sum_of_centroid_objectives = np.sum(nondegenerate_objectives)
 
         rand_vals = np.random.random_sample(n_reallocations) * sum_of_centroid_objectives
         replaced_inds = np.full(n_reallocations, -1)
-        cum_search(real_center_objectives, rand_vals, replaced_inds)               
-        
+        cum_search(nondegenerate_objectives, rand_vals, replaced_inds)
+        centroids[nondegenerate_inds[replaced_inds],:] = np.nan
         additional_center_inds = additional_centers(samples, sample_weights, centroids, n_reallocations, n_candidates, distance_measure=0)
-        n_added = 0
-        for i in range(n_centers):
-            is_replaced = False
-            for j in range(n_reallocations):
-                if real_center_inds[replaced_inds[j]] == i:
-                    is_replaced = True
-                    break            
-            if is_replaced:
-                centroids[i,:] = samples[additional_center_inds[n_added],:]
-                n_added += 1
-            
+        centroids[nondegenerate_inds[replaced_inds],:] = samples[additional_center_inds,:]
+        
+
             
 # Simple center shaking VNS
 @njit(parallel = True)
 def Center_Shaking_VNS(samples, sample_weights, sample_membership, sample_objectives, centroids, centroid_sums, centroid_counts, centroid_objectives, objective, local_max_iters=300, local_tol=0.0001, kmax=5, max_cpu_time=10, max_iters=100, n_candidates=3, printing=False):
     n_samples, n_features = samples.shape
     n_sample_weights, = sample_weights.shape
-    n_centers = centroids.shape[0]       
-    
+    n_centers = centroids.shape[0]    
+
+    cpu_time = 0.0
+    n_iters = 0
+    k = 1
+    n_iters_k = 0
+    if printing: 
+        with objmode:
+            print ('%-30s%-7s%-15s%-15s%-15s' % ('objective', 'k', 'n_iters', 'n_iters_k', 'cpu_time'))
+        
     with objmode(start_time = 'float64'):
         start_time = time.perf_counter()
                 
     best_objective = objective
-    n_iters = 0
     best_n_local_iters = 0
     
     if (n_samples > 0) and (n_features > 0) and (n_centers > 0):
@@ -2059,11 +2074,17 @@ def Center_Shaking_VNS(samples, sample_weights, sample_membership, sample_object
             # Local Search Initialized by Neighborhood Solution
             neighborhood_objective, neighborhood_n_iters = k_means(samples, sample_weights, neighborhood_sample_membership, neighborhood_sample_objectives, neighborhood_centroids, neighborhood_centroid_sums, neighborhood_centroid_counts, neighborhood_centroid_objectives, local_max_iters, local_tol, True)
             
+            with objmode(current_time = 'float64'):
+                current_time = time.perf_counter()
+            cpu_time = current_time - start_time            
+            
             # Check for the Best
             if neighborhood_objective < best_objective:
                 best_objective = neighborhood_objective
                 best_n_local_iters = neighborhood_n_iters
-                if printing: print(best_objective, k)
+                if printing:
+                    with objmode:
+                        print ('%-30f%-7i%-15i%-15i%-15.2f' % (best_objective, k, n_iters, n_iters_k, cpu_time))
                 k = 0
                 
                 # Remember the Best Solution
@@ -2078,12 +2099,10 @@ def Center_Shaking_VNS(samples, sample_weights, sample_membership, sample_object
                         best_centroid_sums[i,j] = neighborhood_centroid_sums[i,j]
                 
             k += 1
-            if k > kmax: k = 1        
-            n_iters += 1
-            
-            with objmode(current_time = 'float64'):
-                current_time = time.perf_counter()
-            cpu_time = current_time - start_time
+            if k > kmax: 
+                k = 1
+                n_iters_k += 1
+            n_iters += 1            
             
         # Replace Current Solution by the Best One
         for i in prange(n_samples):
@@ -2096,94 +2115,100 @@ def Center_Shaking_VNS(samples, sample_weights, sample_membership, sample_object
                 centroids[i,j] = best_centroids[i,j]
                 centroid_sums[i,j] = best_centroid_sums[i,j]
                 
-    if printing: print(best_objective)
+    if printing:
+        with objmode:
+            print ('%-30f%-7i%-15i%-15i%-15.2f' % (best_objective, k, n_iters, n_iters_k, cpu_time))
                 
     return best_objective, n_iters, best_n_local_iters
 
 
-
+# Для обработки больших данных сделать возможность обработки разряженного входного датасета??? (или кому надо тот сам на вход подаст разряженный датасет???)
 # Доработать эту процедуру чтобы можно было выбрать метрику.
 # Использовать k-medoids вместо k-means чтобы можно было использовать полную предрасчитанную матрицу расстояний
 #
 # The idea of the algorithm is inspired by:
 # Likasa A., Vlassisb N., Verbeek J.J. The global k-means clustering algorithm //
 # Pattern Recognition 36 (2003), pp. 451 – 461
-@njit(parallel = True)
-def number_of_clusters(samples, min_num = -1, max_num = -1, max_iters = 300, tol=0.0001):
-             
+@njit(parallel=True)
+def number_of_clusters(samples, min_num=-1, max_num=-1, max_iters=300, tol=0.0001):
     n_samples = samples.shape[0]
     n_features = samples.shape[1]
     
-    if n_samples > 0 and n_features > 0:
-        
-        if min_num < 2 or min_num > n_samples:
-            min_num = 2
-        
-        if max_num < 0 or max_num > n_samples:
-            max_num = n_samples    
-        
+    if min_num < 2 or min_num > n_samples:
+        min_num = 2
+    if max_num < 0 or max_num > n_samples:
+        max_num = n_samples
+
+    if n_samples > 0 and n_features > 0 and min_num < max_num:
+
         objectives = np.full(max_num, 0.0)
-        
+
         used_samples = np.full(n_samples, False)
-        global_centroid = np.reshape(np.sum(samples, axis = 0)/n_samples, (1, samples.shape[1]))
-        
-        
+        global_centroid = np.reshape(np.sum(samples, axis=0) / n_samples, (1, samples.shape[1]))
+
         D = distance_matrix_euclidean2_XY_cpu(global_centroid, samples)
-        medoid_ind = np.argmin(D[0])              
-      
-        n_centroids = 1               
-        
-        sample_weights2, sample_membership2, sample_objectives2, centroids2, centroid_sums2, centroid_counts2, centroid_objectives2 = empty_state(n_samples, n_features, n_centroids)
-        centroids2[0,:] = samples[medoid_ind, :]
-        
-        
-        centroids = np.full((n_samples, n_features), np.nan)
-        centroids[0,:] = samples[medoid_ind, :]
+        medoid_ind = np.argmin(D[0])
+
+        n_centroids = 1
+
+        sample_weights, sample_membership, sample_objectives, centroids2, centroid_sums, centroid_counts, centroid_objectives = empty_state(n_samples, n_features, n_centroids)
+        centroids2[0, :] = samples[medoid_ind, :]
+
+        centroids = np.full((max_num, n_features), np.nan)
+        centroids[0, :] = samples[medoid_ind, :]
         used_samples[medoid_ind] = True
-        
-        objectives[0], _ = k_means(samples, sample_weights2, sample_membership2, sample_objectives2, centroids2, centroid_sums2, centroid_counts2, centroid_objectives2, max_iters, tol, True)
-        
+
+        objectives[0], _ = assignment(samples, sample_weights, sample_membership, sample_objectives, centroids2, centroid_objectives)
+
         local_objectives = np.empty(n_samples)
-        
-        for i in range(1,max_num):
-            
+
+        for i in range(1, max_num):
+
             local_objectives.fill(np.inf)
-                        
+
             for j in prange(n_samples):
-                                
+
                 if not used_samples[j]:
-                    
-                    sample_weights3, sample_membership3, sample_objectives3, centroids3, centroid_sums3, centroid_counts3, centroid_objectives3 = empty_state(n_samples, n_features, n_centroids+1)
-                    centroids3 = np.concatenate((centroids[:n_centroids], np.reshape(samples[j], (1, samples.shape[1]))))
-                    local_objectives[j], _ = k_means(samples, sample_weights3, sample_membership3, sample_objectives3, centroids3, centroid_sums3, centroid_counts3, centroid_objectives3, max_iters, tol, False)
-                    
+                    sample_weights, sample_membership, sample_objectives, centroids2, centroid_sums, centroid_counts, centroid_objectives = empty_state(n_samples, n_features, n_centroids)
+
+                    centroids2 = np.concatenate((centroids[:n_centroids], np.reshape(samples[j], (1, samples.shape[1]))))
+                    local_objectives[j], _ = assignment(samples, sample_weights, sample_membership, sample_objectives, centroids2, centroid_objectives)
+
             min_ind = np.argmin(local_objectives)
             used_samples[min_ind] = True
-            centroids[n_centroids,:] = samples[min_ind,:]
-            objectives[n_centroids] = local_objectives[min_ind]            
-            n_centroids += 1        
+            centroids[n_centroids, :] = samples[min_ind, :]
+            objectives[n_centroids] = local_objectives[min_ind]
+            n_centroids += 1
 
         cluster_nums = np.arange(min_num, max_num)
         drop_rates = np.empty(cluster_nums.shape[0])
-        
-        for i in range(min_num-1,max_num-1):
-            
-            p1 = objectives[i-1]
+
+        for i in range(min_num - 1, max_num - 1):
+
+            p1 = objectives[i - 1]
             p2 = objectives[i]
-            p3 = objectives[i+1]
-            d1 = abs(p1-p2)
-            d2 = abs(p2-p3)
+            p3 = objectives[i + 1]
+
+            d1 = abs(p1 - p2)
+            d2 = abs(p2 - p3)
             
+            #d1 = p1 - p2
+            #d2 = p2 - p3
+
             if d2 != 0.0:
-                drop_rates[i-1] = d1/d2
+                drop_rates[i - min_num + 1] = d1 / d2
             else:
-                drop_rates[i-1] = 0.0
-                
-        n_clusters = cluster_nums[np.argmax(drop_rates)]                          
-                
-        return n_clusters, cluster_nums, drop_rates, objectives
+                drop_rates[i - min_num + 1] = 0.0
 
+        n_clusters = cluster_nums[np.argmax(drop_rates)]
+    else:
+        n_clusters = -1
+        cluster_nums = np.full(0, -1)
+        drop_rates = np.empty(0)
+        objectives = np.empty(0)      
+                        
 
+    return n_clusters, cluster_nums, drop_rates, objectives
 
 
 @njit
