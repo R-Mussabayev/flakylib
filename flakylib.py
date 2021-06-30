@@ -1,10 +1,12 @@
-# Flaky Clustering Library v0.08
+# Flaky Clustering Library v0.1
 # Big MSSC (Minimum Sum-Of-Squares Clustering)
 
 # Nenad Mladenovic, Rustam Mussabayev, Alexander Krassovitskiy
 # rmusab@gmail.com
 
 
+# v0.1  - 30/06/2021 - Bug fixing in multi_portion_mssc
+# v0.09 - 10/11/2020 - Revision of shake_centers logic
 # v0.08 - 18/09/2020 - Bug fixing;
 # v0.07 - 19/07/2020 - New functionality: distance matrices calculation routines with GPU support; different distance metrics; revision of optimal number of clusters routine;
 # v0.06 - 05/06/2020 - New functionality: method sequencing;
@@ -1974,40 +1976,106 @@ def Membership_Shaking_VNS(samples, sample_weights, sample_membership, sample_ob
             print ('%-30f%-7i%-15i%-15i%-15.2f' % (best_objective, k, n_iters, n_iters_k, cpu_time))
     
     return objective, n_iters
-    
 
+    
+# The parameter "shaking_mode" is used to define the used logic of centroid-to-entity reallocations:
+# 0 - "Lumped mode" - finding a center with the worst objective and k-1 closest to it other centers, then replace these k centers with new ones (like in J-means);
+# 1 - "Scatter mode" - finding a k centers distributed in the space and not connected to each other, then replace them with new ones (like in J-means);
+# 2 - finding the k centers with the worst objectives and replace each of them with a random internal entity from their corresponding clusters (like I-means in [Nilolaev and Mladenovic 2015])
+# 3 - replace all nondegenerate centers with a random internal entity from their corresponding clusters
 @njit
-def shake_centers(n_reallocations, samples, sample_weights, centroids, centroid_counts, centroid_objectives, n_candidates=3):
+def shake_centers(k, samples, sample_weights, sample_membership, centroids, centroid_counts, centroid_objectives, n_candidates=3, shaking_mode=1, fully_random = False):
     n_samples, n_features = samples.shape
     n_sample_weights, = sample_weights.shape
-    n_centers = centroids.shape[0]
-    nondegenerate_mask = np.sum(np.isnan(centroids), axis = 1) == 0
-    n_nondegenerate = np.sum(nondegenerate_mask)
+    n_centers = centroids.shape[0]   
+    
+    degenerate_mask = np.sum(np.isnan(centroids), axis = 1) > 0
+    nondegenerate_mask = ~degenerate_mask
+    
+    n_degenerate = np.sum(degenerate_mask)
+    n_nondegenerate = n_centers-n_degenerate
         
-    if (n_reallocations > 0) and (n_nondegenerate > 0):
+    if (k > 0) and (n_nondegenerate > 0):
         
-        if n_reallocations > n_nondegenerate:
-            n_reallocations = n_nondegenerate
+        if k > n_nondegenerate:
+            k = n_nondegenerate
         
         nondegenerate_inds = np.arange(n_centers)[nondegenerate_mask]
         nondegenerate_objectives = centroid_objectives[nondegenerate_mask]
         sum_of_centroid_objectives = np.sum(nondegenerate_objectives)
-
-        rand_vals = np.random.random_sample(n_reallocations) * sum_of_centroid_objectives
-        replaced_inds = np.full(n_reallocations, -1)
-        cum_search(nondegenerate_objectives, rand_vals, replaced_inds)
-        centroids[nondegenerate_inds[replaced_inds],:] = np.nan
-        additional_center_inds = additional_centers(samples, sample_weights, centroids, n_reallocations, n_candidates, distance_measure=0)
-        centroids[nondegenerate_inds[replaced_inds],:] = samples[additional_center_inds,:]
         
+        if shaking_mode == 0:
+            
+            if fully_random:
+                target = nondegenerate_inds[np.random.randint(nondegenerate_inds.shape[0])]               
+            else:
+                rand_val = np.random.random_sample(1) * sum_of_centroid_objectives
+                target_ind = np.full(1, -1)
+                cum_search(nondegenerate_objectives, rand_val, target_ind)
+                target = nondegenerate_inds[target_ind[0]]
 
+            if target > -1:            
+                if k-1 > 0:
+                    centroid_weights = np.empty(0)
+                    dists = distance_matrix_euclidean2_XY_weighted_cpu(centroids[np.array([target])], centroids[nondegenerate_mask], centroid_weights, centroid_weights)[0]
+                    replaced_inds = np.argsort(dists)[:k]
+                else:
+                    replaced_inds = np.full(1, target)
+                    
+            centroids[nondegenerate_inds[replaced_inds],:] = np.nan
+            if fully_random:
+                additional_center_inds = np.random.choice(n_samples, k, replace=False)
+            else:    
+                additional_center_inds = additional_centers(samples, sample_weights, centroids, k, n_candidates, distance_measure=0)
+            centroids[nondegenerate_inds[replaced_inds],:] = samples[additional_center_inds,:]                    
+        elif shaking_mode == 1:
+            if fully_random:
+                replaced_inds = nondegenerate_inds[np.random.choice(nondegenerate_inds.shape[0], k, replace=False)]
+            else:
+                rand_vals = np.random.random_sample(k) * sum_of_centroid_objectives
+                replaced_inds = np.full(k, -1)
+                cum_search(nondegenerate_objectives, rand_vals, replaced_inds)
+            
+            centroids[nondegenerate_inds[replaced_inds],:] = np.nan
+            if fully_random:
+                additional_center_inds = np.random.choice(n_samples, k, replace=False)
+            else:
+                additional_center_inds = additional_centers(samples, sample_weights, centroids, k, n_candidates, distance_measure=0)
+            centroids[nondegenerate_inds[replaced_inds],:] = samples[additional_center_inds,:]
+        elif shaking_mode == 2:
+            if fully_random:
+                replaced_inds = nondegenerate_inds[np.random.choice(nondegenerate_inds.shape[0], k, replace=False)]
+            else:            
+                rand_vals = np.random.random_sample(k) * sum_of_centroid_objectives
+                replaced_inds = np.full(k, -1)
+                cum_search(nondegenerate_objectives, rand_vals, replaced_inds)
+            
+            sample_inds = np.arange(n_samples)
+            target_inds = nondegenerate_inds[replaced_inds]
+            for i in range(k):
+                candidate_inds = sample_inds[sample_membership == target_inds[i]]
+                sample_ind = candidate_inds[np.random.randint(candidate_inds.shape[0])]
+                centroids[target_inds[i],:] = samples[sample_ind,:]
+        elif shaking_mode == 3:
+            sample_inds = np.arange(n_samples)
+            for i in nondegenerate_inds:
+                candidate_inds = sample_inds[sample_membership == i]
+                sample_ind = candidate_inds[np.random.randint(candidate_inds.shape[0])]
+                centroids[i,:] = samples[sample_ind,:]
+        else:
+            raise KeyError
+    if n_degenerate > 0:
+        additional_center_inds = additional_centers(samples, sample_weights, centroids, n_degenerate, n_candidates, distance_measure=0)
+        centroids[degenerate_mask,:] = samples[additional_center_inds,:]
+            
+    
             
 # Simple center shaking VNS
 @njit(parallel = True)
-def Center_Shaking_VNS(samples, sample_weights, sample_membership, sample_objectives, centroids, centroid_sums, centroid_counts, centroid_objectives, objective, local_max_iters=300, local_tol=0.0001, kmax=5, max_cpu_time=10, max_iters=100, n_candidates=3, printing=False):
+def Center_Shaking_VNS(samples, sample_weights, sample_membership, sample_objectives, centroids, centroid_sums, centroid_counts, centroid_objectives, objective, local_max_iters=300, local_tol=0.0001, kmax=3, max_cpu_time=10, max_iters=100, n_candidates=3, shaking_mode = 0, fully_random=False, printing=False):
     n_samples, n_features = samples.shape
     n_sample_weights, = sample_weights.shape
-    n_centers = centroids.shape[0]    
+    n_centers = centroids.shape[0]
 
     cpu_time = 0.0
     n_iters = 0
@@ -2031,7 +2099,7 @@ def Center_Shaking_VNS(samples, sample_weights, sample_membership, sample_object
         neighborhood_centroids = np.full((n_centers, n_features), np.nan)
         neighborhood_centroid_sums = np.full((n_centers, n_features), np.nan)
         neighborhood_centroid_counts = np.full(n_centers, 0.0)
-        neighborhood_centroid_objectives = np.full(n_centers, np.nan)        
+        neighborhood_centroid_objectives = np.full(n_centers, np.nan)
         
         # Empty Best Solution
         best_sample_membership = np.full(n_samples, -1)
@@ -2069,7 +2137,7 @@ def Center_Shaking_VNS(samples, sample_weights, sample_membership, sample_object
                 for j in range(n_features):
                     neighborhood_centroids[i,j] = best_centroids[i,j]
                     neighborhood_centroid_sums[i,j] = best_centroid_sums[i,j]          
-            shake_centers(k, samples, sample_weights, neighborhood_centroids, neighborhood_centroid_counts, neighborhood_centroid_objectives, n_candidates)
+            shake_centers(k, samples, sample_weights, sample_membership, neighborhood_centroids, neighborhood_centroid_counts, neighborhood_centroid_objectives, n_candidates, shaking_mode, fully_random)
             
             # Local Search Initialized by Neighborhood Solution
             neighborhood_objective, neighborhood_n_iters = k_means(samples, sample_weights, neighborhood_sample_membership, neighborhood_sample_objectives, neighborhood_centroids, neighborhood_centroid_sums, neighborhood_centroid_counts, neighborhood_centroid_objectives, local_max_iters, local_tol, True)
@@ -2115,9 +2183,9 @@ def Center_Shaking_VNS(samples, sample_weights, sample_membership, sample_object
                 centroids[i,j] = best_centroids[i,j]
                 centroid_sums[i,j] = best_centroid_sums[i,j]
                 
-    if printing:
-        with objmode:
-            print ('%-30f%-7i%-15i%-15i%-15.2f' % (best_objective, k, n_iters, n_iters_k, cpu_time))
+#     if printing:
+#         with objmode:
+#             print ('%-30f%-7i%-15i%-15i%-15.2f' % (best_objective, k, n_iters, n_iters_k, cpu_time))
                 
     return best_objective, n_iters, best_n_local_iters
 
@@ -2212,7 +2280,7 @@ def number_of_clusters(samples, min_num=-1, max_num=-1, max_iters=300, tol=0.000
 
 
 @njit
-def method_sequencing(samples, sample_weights, sample_membership, sample_objectives, centroids, centroid_sums, centroid_counts, centroid_objectives, objective, method_sequence, time_sequence, max_iters_sequence, kmax_sequence, local_max_iters=300, local_tol=0.00001, n_candidates=3, printing=False):
+def method_sequencing(samples, sample_weights, sample_membership, sample_objectives, centroids, centroid_sums, centroid_counts, centroid_objectives, objective, method_sequence, time_sequence, max_iters_sequence, kmax_sequence, local_max_iters=300, local_tol=0.00001, n_candidates=3, shaking_mode = 0, printing=False):
     assert method_sequence.ndim == 1 and time_sequence.ndim == 1 and kmax_sequence.ndim == 1
     sequence_size = method_sequence.shape[0]
     assert time_sequence.shape[0] == sequence_size and max_iters_sequence.shape[0] == sequence_size and kmax_sequence.shape[0] == sequence_size
@@ -2240,7 +2308,7 @@ def method_sequencing(samples, sample_weights, sample_membership, sample_objecti
                 print()
         elif method == 4:
             if printing: print('Center Shaking VNS:')
-            objective, n_iters, n_local_iters = Center_Shaking_VNS(samples, sample_weights, sample_membership, sample_objectives, centroids, centroid_sums, centroid_counts, centroid_objectives, objective, local_max_iters, local_tol, kmax_sequence[i], time_sequence[i], max_iters_sequence[i], n_candidates, printing)
+            objective, n_iters, n_local_iters = Center_Shaking_VNS(samples, sample_weights, sample_membership, sample_objectives, centroids, centroid_sums, centroid_counts, centroid_objectives, objective, local_max_iters, local_tol, kmax_sequence[i], time_sequence[i], max_iters_sequence[i], n_candidates, shaking_mode, False, printing)
             if printing: print()
         elif method == 5:
             if printing: print('Membership Shaking VNS:')
@@ -2304,7 +2372,7 @@ def multi_portion_mssc(samples, sample_weights, centers, method_sequence, time_s
                     p_sample_weights = np.full(0, 0.0)
 
             if init_method == 1:
-                collected_centroids[i] = samples[k_means_pp(p_samples, p_sample_weights, n_clusters, n_candidates, distance_measure=0)]
+                collected_centroids[i] = p_samples[k_means_pp(p_samples, p_sample_weights, n_clusters, n_candidates, distance_measure=0)]
             elif init_method == 2:
                 collected_centroids[i] = np.copy(centers)
             else:
@@ -2317,7 +2385,6 @@ def multi_portion_mssc(samples, sample_weights, centers, method_sequence, time_s
             collected_objectives[i] = method_sequencing(p_samples, p_sample_weights, p_sample_membership, p_sample_objectives, collected_centroids[i], p_centroid_sums, collected_centroid_counts[i], collected_centroid_objectives[i], np.inf, method_sequence, time_sequence, max_iters_sequence, kmax_sequence, local_max_iters, local_tol, n_candidates, False)
             
     return collected_centroids, collected_centroid_counts, collected_centroid_objectives, collected_objectives
-
 
 
 @njit(parallel = True)
@@ -2340,7 +2407,7 @@ def decomposition_aggregation_mssc(samples, sample_weights, method_sequence, tim
 
         centroids, centroid_counts, centroid_objectives, objectives = multi_portion_mssc(samples, sample_weights, centers, method_sequence, time_sequence, max_iters_sequence, kmax_sequence, n_clusters, portion_size, n_portions, init_method, local_max_iters, local_tol, n_candidates)
 
-        full_objectives = np.empty_like(objectives)        
+        full_objectives = np.empty_like(objectives)
         sample_membership = np.full(0, 0)
         sample_objectives = np.full(0, 0.0)
         centroid_objectives = np.empty((n_portions, n_clusters))
@@ -2365,8 +2432,8 @@ def decomposition_aggregation_mssc(samples, sample_weights, method_sequence, tim
                         basis_samples[ind] = centroids[i,j]
                         #basis_weights[ind] = centroid_objectives[i,j]*full_objectives[i]
                         #basis_weights[ind] = centroid_objectives[i,j]
-                        basis_weights[ind] = centroid_objectives[i,j]/centroid_counts[i,j] #!!!!!!!!!
-                        #basis_weights[ind] = full_objectives[i]
+                        #basis_weights[ind] = centroid_objectives[i,j]/centroid_counts[i,j] #!!!!!!!!!
+                        basis_weights[ind] = full_objectives[i]
                         #basis_weights[ind] = (centroid_objectives[i,j]*full_objectives[i])/centroid_counts[i,j]
                         ind += 1
             normalization1D(basis_weights, True)
