@@ -5,6 +5,7 @@
 # rmusab@gmail.com
 
 
+# v0.11 - 06/09/2021 - Revision of VNS logic in Membership_Shaking_VNS and Center_Shaking_VNS
 # v0.1  - 30/06/2021 - Bug fixing in multi_portion_mssc
 # v0.09 - 10/11/2020 - Revision of shake_centers logic
 # v0.08 - 18/09/2020 - Bug fixing;
@@ -1959,12 +1960,11 @@ def Membership_Shaking_VNS(samples, sample_weights, sample_membership, sample_ob
             if printing:
                 with objmode:
                     print ('%-30f%-7i%-15i%-15i%-15.2f' % (best_objective, k, n_iters, n_iters_k, cpu_time))
-            k = 0
-            
-        k += 1
-        if k > kmax:
             k = 1
             n_iters_k += 1
+        else:
+            if k < kmax:
+                k += 1           
         n_iters += 1
                     
     objective = best_objective
@@ -2153,7 +2153,8 @@ def Center_Shaking_VNS(samples, sample_weights, sample_membership, sample_object
                 if printing:
                     with objmode:
                         print ('%-30f%-7i%-15i%-15i%-15.2f' % (best_objective, k, n_iters, n_iters_k, cpu_time))
-                k = 0
+                k = 1
+                n_iters_k += 1
                 
                 # Remember the Best Solution
                 for i in prange(n_samples):
@@ -2165,11 +2166,9 @@ def Center_Shaking_VNS(samples, sample_weights, sample_membership, sample_object
                     for j in range(n_features):
                         best_centroids[i,j] = neighborhood_centroids[i,j]
                         best_centroid_sums[i,j] = neighborhood_centroid_sums[i,j]
-                
-            k += 1
-            if k > kmax: 
-                k = 1
-                n_iters_k += 1
+            else:
+                if k < kmax:
+                    k += 1
             n_iters += 1            
             
         # Replace Current Solution by the Best One
